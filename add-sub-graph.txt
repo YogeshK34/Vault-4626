@@ -1,0 +1,241 @@
+File: Contract-Interaction.tsx (ERC-4626 Vault Console)
+Task: Add a subgraph event feed section at the bottom of the existing component. Do not touch anything above the final closing </Card> of the Redeem section. Append everything below it.
+
+Context you must read first:
+The component already has:
+
+State, ethers.js v6, sonner toasts, shadcn/ui (Card, CardContent, CardHeader, CardTitle, CardDescription, Button, Badge, Separator), and a <Spinner /> from ./ui/spinner
+Design system: zinc/cyan dark palette, font-mono on all addresses/amounts, <dl> panels for data display, section dividers with <Separator>
+All new code must match this existing style exactly — no new imports for styling, no inline styles, no new color choices
+
+What to add:
+1. GraphQL fetch helper
+Add a single querySubgraph helper function near the other functions (not inside JSX):
+
+const querySubgraph = async (query: string) => {
+  const res = await fetch('https://api.studio.thegraph.com/query/1756082/vault-contract/1', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  const json = await res.json();
+  if (json.errors) throw new Error(json.errors[0].message);
+  return json.data;
+};
+
+2. State declarations
+Add these with the existing state block at the top:
+
+const [deposits, setDeposits] = useState<any[]>([]);
+const [withdraws, setWithdraws] = useState<any[]>([]);
+const [transfers, setTransfers] = useState<any[]>([]);
+const [approvals, setApprovals] = useState<any[]>([]);
+const [indexerLoading, setIndexerLoading] = useState<boolean>(false);
+const [indexerError, setIndexerError] = useState<string>('');
+
+
+3. Fetch function
+Add this function with the others: 
+
+const fetchIndexerEvents = async () => {
+  try {
+    setIndexerLoading(true);
+    setIndexerError('');
+
+    const data = await querySubgraph(`{
+      deposits(first: 10, orderBy: blockTimestamp, orderDirection: desc) {
+        id sender owner assets shares blockTimestamp transactionHash
+      }
+      withdraws(first: 10, orderBy: blockTimestamp, orderDirection: desc) {
+        id sender receiver owner assets shares blockTimestamp transactionHash
+      }
+      transfers(first: 10, orderBy: blockTimestamp, orderDirection: desc) {
+        id from to value blockTimestamp transactionHash
+      }
+      approvals(first: 10, orderBy: blockTimestamp, orderDirection: desc) {
+        id owner spender value blockTimestamp transactionHash
+      }
+    }`);
+
+    setDeposits(data.deposits ?? []);
+    setWithdraws(data.withdraws ?? []);
+    setTransfers(data.transfers ?? []);
+    setApprovals(data.approvals ?? []);
+    toast.success('Indexer events loaded!', { position: 'top-center' });
+  } catch (error: any) {
+    console.error(error);
+    setIndexerError(error.message ?? 'Failed to fetch indexer events');
+    toast.error('Failed to fetch indexer events!', { position: 'top-center' });
+  } finally {
+    setIndexerLoading(false);
+  }
+};
+
+
+4. Add indexerLoading to the existing isAnyLoading
+Find this line:
+
+const isAnyLoading = walletLoading || totalAssetsLoading || assetLoading || totalSupplyLoading || balanceLoading || depositLoading || withdrawLoading;
+
+
+Add || indexerLoading at the end.
+
+5. JSX — append after the Redeem </Card>
+Follow the exact same section divider + Card pattern used throughout the file:
+
+
+{/* ── Section divider: Indexer ── */}
+<div className="flex items-center gap-3">
+  <Separator className="flex-1 bg-zinc-800" />
+  <span className="text-xs font-mono uppercase tracking-widest text-zinc-600">indexer</span>
+  <Separator className="flex-1 bg-zinc-800" />
+</div>
+
+{/* ── Read: Subgraph Event Feed ── */}
+<Card className="border-zinc-800 bg-zinc-900/40">
+  <CardHeader>
+    <CardTitle className="text-base text-zinc-100">Event Feed</CardTitle>
+    <CardDescription className="text-zinc-500">
+      Live vault events from The Graph subgraph indexer.
+    </CardDescription>
+  </CardHeader>
+  <CardContent className="flex flex-col gap-6">
+
+    <Button
+      onClick={fetchIndexerEvents}
+      disabled={indexerLoading}
+      variant="outline"
+      className="w-full border-zinc-700 bg-transparent text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
+    >
+      {indexerLoading ? (
+        <span className="flex items-center gap-2">
+          <Spinner className="h-4 w-4" /> Fetching…
+        </span>
+      ) : 'Fetch Events'}
+    </Button>
+
+    {indexerError && (
+      <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2">
+        <p className="font-mono text-xs text-red-400">⚠ {indexerError}</p>
+      </div>
+    )}
+
+    {/* Deposits */}
+    {deposits.length > 0 && (
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-mono uppercase tracking-widest text-zinc-600">Deposits</p>
+        <dl className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4">
+          {deposits.map((d) => (
+            <div key={d.id} className="flex items-center justify-between py-3">
+              <dt className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-zinc-500">
+                  {d.sender.slice(0, 6)}…{d.sender.slice(-4)} → {d.owner.slice(0, 6)}…{d.owner.slice(-4)}
+                </span>
+                <span className="font-mono text-[10px] text-zinc-700">
+                  {new Date(Number(d.blockTimestamp) * 1000).toLocaleTimeString()}
+                </span>
+              </dt>
+              <dd className="flex flex-col items-end gap-0.5">
+                <span className="font-mono text-sm text-cyan-300">
+                  {ethers.formatUnits(d.assets, 18)} assets
+                </span>
+                <span className="font-mono text-xs text-zinc-500">
+                  {ethers.formatUnits(d.shares, 18)} shares
+                </span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )}
+
+    {/* Withdraws */}
+    {withdraws.length > 0 && (
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-mono uppercase tracking-widest text-zinc-600">Withdraws</p>
+        <dl className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4">
+          {withdraws.map((w) => (
+            <div key={w.id} className="flex items-center justify-between py-3">
+              <dt className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-zinc-500">
+                  {w.sender.slice(0, 6)}…{w.sender.slice(-4)} → {w.receiver.slice(0, 6)}…{w.receiver.slice(-4)}
+                </span>
+                <span className="font-mono text-[10px] text-zinc-700">
+                  {new Date(Number(w.blockTimestamp) * 1000).toLocaleTimeString()}
+                </span>
+              </dt>
+              <dd className="flex flex-col items-end gap-0.5">
+                <span className="font-mono text-sm text-cyan-300">
+                  {ethers.formatUnits(w.assets, 18)} assets
+                </span>
+                <span className="font-mono text-xs text-zinc-500">
+                  {ethers.formatUnits(w.shares, 18)} shares
+                </span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )}
+
+    {/* Transfers */}
+    {transfers.length > 0 && (
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-mono uppercase tracking-widest text-zinc-600">Transfers</p>
+        <dl className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4">
+          {transfers.map((t) => (
+            <div key={t.id} className="flex items-center justify-between py-3">
+              <dt className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-zinc-500">
+                  {t.from.slice(0, 6)}…{t.from.slice(-4)} → {t.to.slice(0, 6)}…{t.to.slice(-4)}
+                </span>
+                <span className="font-mono text-[10px] text-zinc-700">
+                  {new Date(Number(t.blockTimestamp) * 1000).toLocaleTimeString()}
+                </span>
+              </dt>
+              <dd className="font-mono text-sm text-cyan-300">
+                {ethers.formatUnits(t.value, 18)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )}
+
+    {/* Approvals */}
+    {approvals.length > 0 && (
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-mono uppercase tracking-widest text-zinc-600">Approvals</p>
+        <dl className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4">
+          {approvals.map((a) => (
+            <div key={a.id} className="flex items-center justify-between py-3">
+              <dt className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-zinc-500">
+                  {a.owner.slice(0, 6)}…{a.owner.slice(-4)} → {a.spender.slice(0, 6)}…{a.spender.slice(-4)}
+                </span>
+                <span className="font-mono text-[10px] text-zinc-700">
+                  {new Date(Number(a.blockTimestamp) * 1000).toLocaleTimeString()}
+                </span>
+              </dt>
+              <dd className="font-mono text-sm text-emerald-300">
+                {ethers.formatUnits(a.value, 18)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )}
+
+  </CardContent>
+</Card>
+
+
+Rules:
+
+Do not modify anything above the Redeem </Card> except the two additions explicitly called out (state declarations and isAnyLoading)
+Do not add any new imports — ethers, useState, fetch, and all shadcn components are already imported
+Do not change any existing Tailwind classes anywhere in the file
+Approvals use text-emerald-300 for the value (matches the design system convention — emerald for approvals, cyan for transfers/deposits/withdrawals)
+All address truncation follows the existing pattern: .slice(0,6)…slice(-4)
+
+
