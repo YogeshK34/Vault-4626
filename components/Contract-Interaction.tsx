@@ -12,6 +12,8 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Separator } from "./ui/separator";
+import { Container, EthernetPort } from "lucide-react";
+import { sign } from "crypto";
 
 
 export const ContractInteraction = () => {
@@ -35,6 +37,14 @@ export const ContractInteraction = () => {
     const [withdrawOwner, setWithdrawOwner] = useState<string>('');
     const [withdrawShares, setWithdrawShares] = useState<string>('');
     const [walletLoading, setWalletLoading] = useState<boolean>(false);
+    const [mintLoading, setMintLoading] = useState<boolean>(false);
+    const [mintShares, setMintShares] = useState<string>('');
+    const [mintReceiver, setMintReceiver] = useState<string>('');
+    const [redeemLoading, setRedeemLoading] = useState<boolean>(false);
+    const [redeemShares, setRedeemShares] = useState<string>('');
+    const [redeemReceiver, setRedeemReceiver] = useState<string>('');
+    const [redeemOwner, setRedeemOwner] = useState<string>('');
+    const [redeemAssets, setRedeemAssets] = useState<string>('');
 
 
     const decimals = 18;
@@ -123,7 +133,7 @@ export const ContractInteraction = () => {
 
             const fetchAssetAddress = await contract?.asset();
             setAsssetAddress(fetchAssetAddress);
-            toast.error('Asset contract loaded!', { position: 'top-center' });
+            toast.success('Asset contract loaded!', { position: 'top-center' });
 
         } catch (error) {
             console.error(error);
@@ -137,14 +147,15 @@ export const ContractInteraction = () => {
         try {
             setTotalAssetsLoading(true);
 
-            const assetValue = await contract?.totalAssets();
-            setAssetValue(assetValue);
-
+            const rawAssets = await contract?.totalAssets();
+            const assetsValue = ethers.formatUnits(rawAssets, decimals);
+            setAssetValue(assetsValue);
             toast.success('Assets fetched successfully!', { position: 'top-center' })
 
         } catch (error) {
             console.error(error);
             return toast.error('Failed to load assets!')
+
         } finally {
             setTotalAssetsLoading(false);
         }
@@ -211,15 +222,56 @@ export const ContractInteraction = () => {
                 setWithdrawShares(sharesReturned);
                 toast.success(`Withdrawn! Shares burned: ${sharesReturned}`, { position: 'top-center' });
                 await balanceOf(owner);
+                await balanceOf(receiver);
                 await totalSupply();
             }
         } catch (error) {
             console.error(error);
-            return toast.error('Failed to withdraw!');
+            return toast.error('Failed to withdraw!', { position: 'top-center' });
         } finally {
             setWithdrawLoading(false);
         }
     };
+
+    const redeem = async (shares: string, receiver: string, owner: string) => {
+        try {
+            if (!window.ethereum) return toast.error('Metamask not installed!');
+            if (!ethers.isAddress(receiver)) return toast.error('Invalid receiver address!');
+            if (!ethers.isAddress(owner)) return toast.error('Invalid owner address!');
+
+            setRedeemLoading(true);
+            const sharedParsed = ethers.parseUnits(shares, decimals);
+
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const signer = await provider.getSigner();
+
+            const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
+            const tx = await contract.redeem(sharedParsed, receiver, owner);
+
+            const receipt = await tx.wait();
+
+            const parsedLogs = receipt.logs.map((log: any) => {
+                try { return contract.interface.parseLog(log); }
+                catch (error) { return error; }
+            });
+
+            const withdrawLogs = await parsedLogs.find((parsed: any) => parsed?.name === 'Withdraw');
+            if (withdrawLogs) {
+                const returnedAssets = ethers.formatUnits(withdrawLogs.args.assets, decimals);
+                setRedeemAssets(returnedAssets);
+                const { sender, receiver, owner, assets, shares } = await withdrawLogs.args;
+                toast.success(`Redeem succesful! Redeemed ${ethers.formatUnits(assets, decimals)} from ${owner} to ${receiver}`);
+                await balanceOf(owner);
+                await balanceOf(receiver)
+            }
+
+        } catch (error) {
+            console.error(error);
+            return toast.error('Failed to redeem assets!');
+        } finally {
+            setRedeemLoading(false);
+        }
+    }
 
     const deposit = async (assets: string, receiver: string) => {
         try {
@@ -246,9 +298,8 @@ export const ContractInteraction = () => {
             const transferLogs = parsedLogs.find((parsed: any) => parsed?.name === 'Deposit');
 
             if (transferLogs) {
-                const { sender, receiver, assets, shares } = await transferLogs;
-                toast.success('Deposit successful!');
-                await balanceOf(account);
+                const { sender, receiver, assets, shares } = await transferLogs.args;
+                toast.success('Deposit successful!', { position: 'top-center' });
                 await balanceOf(receiver);
                 await totalSupply();
             }
@@ -258,6 +309,42 @@ export const ContractInteraction = () => {
             return toast.error('Failed to deposit!')
         } finally {
             setDepositLoading(false);
+        }
+    }
+
+    const mint = async (shares: string, receiver: string) => {
+        try {
+            if (!window.ethereum) return toast.error('Metamask not installed!');
+            if (!ethers.isAddress(receiver)) return toast.error("Incorrect recevier's address!", { position: 'top-center' });
+            const formattedShares = ethers.parseUnits(shares, decimals);
+            setMintLoading(true);
+
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const signer = await provider.getSigner();
+            const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
+
+            const tx = await contract.mint(formattedShares, receiver);
+            const receipt = await tx.wait();
+
+            const parsedLogs = receipt.logs.map((log: any) => {
+                try { return contract.interface.parseLog(log); }
+                catch (e) { return null };
+            })
+
+            const depositLogs = parsedLogs.find((parsed: any) => parsed?.name === 'Deposit');
+            if (depositLogs) {
+                const { sender, receivers, assets, shares } = await depositLogs.args;
+                toast.success(`Mint success! Minted ${ethers.formatUnits(assets, decimals)} to ${receiver}`,
+                    { position: 'top-center' });
+                await balanceOf(receiver);
+                await totalSupply();
+            }
+
+        } catch (error) {
+            console.error(error);
+            return toast.error('Failed to mint!', { position: 'top-center' })
+        } finally {
+            setMintLoading(false);
         }
     }
 
@@ -415,7 +502,11 @@ export const ContractInteraction = () => {
                         </div>
 
                         <Button
-                            onClick={() => balanceOf(balanceAddress || account)}
+                            onClick={() => {
+                                const addr = (balanceAddress.trim() || account);
+                                if (!addr) return toast.error('No address provided!', { position: 'top-center' });
+                                balanceOf(addr);
+                            }}
                             disabled={balanceLoading || !account}
                             variant="outline"
                             className="w-full border-zinc-700 bg-transparent text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
@@ -502,6 +593,67 @@ export const ContractInteraction = () => {
                     </CardContent>
                 </Card>
 
+                {/* ── Section divider: Mint ── */}
+                <div className="flex items-center gap-3">
+                    <Separator className="flex-1 bg-zinc-800" />
+                    <span className="text-xs font-mono uppercase tracking-widest text-zinc-600">Mint</span>
+                    <Separator className="flex-1 bg-zinc-800" />
+                </div>
+
+                {/* ── Write: Mint ── */}
+                <Card className="border-zinc-800 bg-zinc-900/40">
+                    <CardHeader>
+                        <CardTitle className="text-base text-zinc-100">Mint Assets</CardTitle>
+                        <CardDescription className="text-zinc-500">
+                            Mint assets by passing in shares & a Receiver&apos;s address.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="mintAmount" className="text-xs text-zinc-400">
+                                Shares
+                            </Label>
+                            <Input
+                                id="mintAmount"
+                                type="text"
+                                value={mintShares}
+                                onChange={(e) => setMintShares(e.target.value)}
+                                disabled={mintLoading}
+                                placeholder="0.0"
+                                className="border-zinc-800 bg-zinc-950 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-cyan-400/40"
+                            />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="mintReceiver" className="text-xs text-zinc-400">
+                                Receiver Address
+                            </Label>
+                            <Input
+                                id="mintReceiver"
+                                type="text"
+                                value={mintReceiver}
+                                onChange={(e) => setMintReceiver(e.target.value)}
+                                disabled={mintLoading}
+                                placeholder="0x..."
+                                className="border-zinc-800 bg-zinc-950 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-cyan-400/40"
+                            />
+                        </div>
+
+                        <Button
+                            onClick={() => mint(mintShares, mintReceiver)}
+                            disabled={mintLoading || !account || !mintShares || !mintReceiver}
+                            className="w-full bg-cyan-400 text-zinc-950 hover:bg-cyan-300"
+                        >
+                            {mintLoading ? (
+                                <span className="flex items-center gap-2">
+                                    <Spinner className="h-4 w-4" /> Minting…
+                                </span>
+                            ) : "Mint"}
+                        </Button>
+                    </CardContent>
+                </Card>
+
                 {/* ── Section divider: WITHDRAW ── */}
                 <div className="flex items-center gap-3">
                     <Separator className="flex-1 bg-zinc-800" />
@@ -585,6 +737,91 @@ export const ContractInteraction = () => {
                             </dl>
                         )}
 
+                    </CardContent>
+                </Card>
+
+                {/* ── Section divider: Redeem ── */}
+                <div className="flex items-center gap-3">
+                    <Separator className="flex-1 bg-zinc-800" />
+                    <span className="text-xs font-mono uppercase tracking-widest text-zinc-600">Redeem</span>
+                    <Separator className="flex-1 bg-zinc-800" />
+                </div>
+
+                {/* ── Write: Redeem ── */}
+                <Card className="border-zinc-800 bg-zinc-900/40">
+                    <CardHeader>
+                        <CardTitle className="text-base text-zinc-100">Redeem Assets</CardTitle>
+                        <CardDescription className="text-zinc-500">
+                            Redeem owner&apos;s assets to a Receiver.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="redeemShares" className="text-xs text-zinc-400">
+                                Shares
+                            </Label>
+                            <Input
+                                id="redeemShares"
+                                type="text"
+                                value={redeemShares}
+                                onChange={(e) => setRedeemShares(e.target.value)}
+                                disabled={redeemLoading}
+                                placeholder="0.0"
+                                className="border-zinc-800 bg-zinc-950 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-cyan-400/40"
+                            />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="redeemReceiver" className="text-xs text-zinc-400">
+                                Receiver Address
+                            </Label>
+                            <Input
+                                id="redeemReceiver"
+                                type="text"
+                                value={redeemReceiver}
+                                onChange={(e) => setRedeemReceiver(e.target.value)}
+                                disabled={redeemLoading}
+                                placeholder="0x..."
+                                className="border-zinc-800 bg-zinc-950 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-cyan-400/40"
+                            />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="redeemOwner" className="text-xs text-zinc-400">
+                                Owner Address
+                            </Label>
+                            <Input
+                                id="redeemOwner"
+                                type="text"
+                                value={redeemOwner}
+                                onChange={(e) => setRedeemOwner(e.target.value)}
+                                disabled={redeemLoading}
+                                placeholder="0x..."
+                                className="border-zinc-800 bg-zinc-950 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-cyan-400/40"
+                            />
+                        </div>
+
+                        <Button
+                            onClick={() => redeem(redeemShares, redeemReceiver, redeemOwner)}
+                            disabled={redeemLoading || !account || !redeemShares || !redeemReceiver || !redeemOwner}
+                            className="w-full bg-cyan-400 text-zinc-950 hover:bg-cyan-300"
+                        >
+                            {redeemLoading ? (
+                                <span className="flex items-center gap-2">
+                                    <Spinner className="h-4 w-4" /> Redeeming…
+                                </span>
+                            ) : "Redeem"}
+                        </Button>
+
+                        {redeemAssets && (
+                            <dl className="mt-1 divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4">
+                                <div className="flex items-center justify-between py-3">
+                                    <dt className="text-xs text-zinc-500">Assets Redeemed</dt>
+                                    <dd className="font-mono text-sm text-cyan-300">{redeemAssets}</dd>
+                                </div>
+                            </dl>
+                        )}
                     </CardContent>
                 </Card>
 
