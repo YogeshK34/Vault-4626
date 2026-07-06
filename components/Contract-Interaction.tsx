@@ -12,8 +12,6 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Separator } from "./ui/separator";
-import { Container, EthernetPort } from "lucide-react";
-import { sign } from "crypto";
 
 
 export const ContractInteraction = () => {
